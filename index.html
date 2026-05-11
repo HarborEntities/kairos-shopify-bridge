@@ -4,127 +4,75 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Kairos Operator Bridge</title>
-  <meta name="shopify-api-key" content="ee3c255cf1f7b8d80c5aae0a4e4e51e6" />
-  <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+  <meta name="shopify-api-key" content="8716255ddaa42a019b94ee26481a7864" />
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 24px; max-width: 800px; margin: 0 auto; color: #202223; }
-    h1 { font-size: 18px; margin: 0 0 12px; }
-    .log { padding: 12px 16px; border-radius: 6px; background: #f6f6f7; margin: 6px 0; font-family: monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+    h1 { font-size: 20px; margin: 0 0 12px; }
+    .info { padding: 12px 16px; border-radius: 6px; background: #f6f6f7; margin: 12px 0; font-size: 14px; line-height: 1.5; }
     .ok { background: #d4edda; color: #155724; }
     .err { background: #f8d7da; color: #721c24; }
-    .warn { background: #fff3cd; color: #856404; }
+    .token-box { padding: 16px; border-radius: 6px; background: #202223; color: #e3e3e3; font-family: monospace; font-size: 11px; word-break: break-all; margin: 12px 0; line-height: 1.4; max-height: 200px; overflow: auto; user-select: all; }
+    .meta { font-size: 12px; color: #6d7175; margin-top: 8px; }
+    button { padding: 10px 16px; background: #008060; color: white; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+    button:hover { background: #006e52; }
   </style>
 </head>
 <body>
-  <h1>Kairos Operator, session token bridge (verbose)</h1>
-  <div id="logs"></div>
+  <h1>Kairos Operator, session token bridge</h1>
+  <div id="result"></div>
 
   <script>
-    const KAIROS_WEBHOOK = "https://webhook.site/256fa440-886a-4a13-a7e6-eb00d7590b8e";
-    const logsEl = document.getElementById("logs");
+    const result = document.getElementById("result");
 
-    function log(msg, cls) {
-      const div = document.createElement("div");
-      div.className = "log" + (cls ? " " + cls : "");
-      div.textContent = msg;
-      logsEl.appendChild(div);
+    function el(tag, props, ...kids) {
+      const e = document.createElement(tag);
+      if (props) Object.assign(e, props);
+      for (const k of kids) e.appendChild(typeof k === "string" ? document.createTextNode(k) : k);
+      return e;
     }
 
-    log("Step 1: Script started at " + new Date().toISOString());
-    log("Step 2: URL = " + window.location.href);
-    log("Step 3: In iframe = " + (window.self !== window.top));
+    const params = new URLSearchParams(window.location.search);
+    const idToken = params.get("id_token");
+    const shop = params.get("shop");
+    const host = params.get("host");
 
-    async function run() {
-      try {
-        log("Step 4: Checking for window.shopify global...");
-        if (typeof window.shopify === "undefined") {
-          log("FAIL: window.shopify is undefined. App Bridge script did not load OR did not initialize. Check that this page is loaded inside Shopify admin and that the shopify-api-key meta tag is correct.", "err");
-          return;
-        }
-        log("Step 5: window.shopify exists. Type: " + typeof window.shopify, "ok");
-
-        // dump available methods
-        try {
-          const keys = Object.keys(window.shopify).filter(k => typeof window.shopify[k] !== "object" || k === "config");
-          log("Step 6: shopify methods/props: " + keys.join(", "));
-        } catch (e) {
-          log("Step 6 warning: could not enumerate shopify keys: " + e.message, "warn");
-        }
-
-        // dump config
-        try {
-          const cfg = window.shopify.config || {};
-          log("Step 7: shopify.config: shop=" + (cfg.shop || "(none)") + " host=" + (cfg.host || "(none)") + " apiKey=" + (cfg.apiKey ? cfg.apiKey.substring(0, 8) + "..." : "(none)"));
-        } catch (e) {
-          log("Step 7 error: " + e.message, "err");
-        }
-
-        log("Step 8: Calling shopify.idToken()...");
-        let token;
-        try {
-          // try idToken first (App Bridge v4)
-          if (typeof window.shopify.idToken === "function") {
-            token = await Promise.race([
-              window.shopify.idToken(),
-              new Promise((_, rej) => setTimeout(() => rej(new Error("idToken() timeout after 15s")), 15000)),
-            ]);
-          } else {
-            log("Step 8 warning: shopify.idToken is not a function. Trying shopify.getSessionToken...", "warn");
-            if (typeof window.shopify.getSessionToken === "function") {
-              token = await Promise.race([
-                window.shopify.getSessionToken(),
-                new Promise((_, rej) => setTimeout(() => rej(new Error("getSessionToken() timeout after 15s")), 15000)),
-              ]);
-            } else {
-              log("FAIL: No idToken or getSessionToken method found on shopify global. Available keys above.", "err");
-              return;
-            }
-          }
-        } catch (e) {
-          log("Step 8 FAIL: " + (e && e.message ? e.message : String(e)), "err");
-          return;
-        }
-
-        if (!token) {
-          log("Step 9 FAIL: token returned but empty.", "err");
-          return;
-        }
-        log("Step 9: Token acquired. Prefix: " + token.substring(0, 32) + "... length: " + token.length, "ok");
-
-        log("Step 10: POSTing to webhook " + KAIROS_WEBHOOK.substring(0, 40) + "...");
-        try {
-          const r = await fetch(KAIROS_WEBHOOK, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              session_token: token,
-              shop: (window.shopify.config && window.shopify.config.shop) || "unknown",
-              host: (window.shopify.config && window.shopify.config.host) || "unknown",
-              timestamp: Date.now(),
-            }),
-          });
-          log("Step 11: POST returned HTTP " + r.status, r.ok ? "ok" : "err");
-          if (!r.ok) {
-            const text = await r.text();
-            log("Response body: " + text.substring(0, 400), "err");
-          } else {
-            log("Step 12: DONE. Token captured by Kairos. You can close this tab.", "ok");
-          }
-        } catch (e) {
-          log("Step 10 FAIL: fetch error: " + (e && e.message ? e.message : String(e)), "err");
-          log("This is usually CORS or a network issue. The session token IS in your browser; we just could not POST it. Copy the token from Step 9 above and paste it to Kairos manually.", "warn");
-        }
-      } catch (e) {
-        log("UNCAUGHT: " + (e && e.message ? e.message : String(e)), "err");
-      }
-    }
-
-    // Wait for App Bridge to fully initialize before calling
-    if (window.shopify) {
-      run();
+    if (!idToken) {
+      const e = el("div", { className: "info err" });
+      e.appendChild(el("strong", null, "No id_token in URL."));
+      e.appendChild(el("br"));
+      e.appendChild(document.createTextNode("This page must be loaded from inside the Shopify admin (Apps menu, click Kairos Operator). If you opened the GitHub Pages URL directly, that will not work."));
+      result.appendChild(e);
     } else {
-      log("Waiting 1s for App Bridge to initialize...");
-      setTimeout(run, 1000);
+      const ok = el("div", { className: "info ok" });
+      ok.appendChild(el("strong", null, "Session token captured."));
+      ok.appendChild(el("br"));
+      ok.appendChild(document.createTextNode("Copy the value below and paste it to Kairos. Token is valid for 60 seconds, exchange must happen fast."));
+      result.appendChild(ok);
+
+      const tokenBox = el("div", { className: "token-box", id: "tokenBox" }, idToken);
+      result.appendChild(tokenBox);
+
+      const meta = el("div", { className: "meta" });
+      meta.appendChild(document.createTextNode("Shop: " + (shop || "unknown") + " | Host: " + (host || "unknown") + " | Captured at: " + new Date().toISOString()));
+      result.appendChild(meta);
+
+      const btn = el("button", null, "Copy token to clipboard");
+      btn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(idToken);
+          btn.textContent = "Copied! Paste to Kairos now";
+          btn.style.background = "#006e52";
+        } catch (e) {
+          // fallback: select the text
+          const range = document.createRange();
+          range.selectNodeContents(tokenBox);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          btn.textContent = "Selected, press Ctrl+C / Cmd+C";
+        }
+      };
+      result.appendChild(btn);
     }
   </script>
 </body>
