@@ -7,65 +7,125 @@
   <meta name="shopify-api-key" content="ee3c255cf1f7b8d80c5aae0a4e4e51e6" />
   <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 32px; max-width: 720px; margin: 0 auto; color: #202223; }
-    h1 { font-size: 20px; margin: 0 0 16px; }
-    .status { padding: 16px; border-radius: 8px; background: #f6f6f7; margin: 16px 0; font-family: monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 24px; max-width: 800px; margin: 0 auto; color: #202223; }
+    h1 { font-size: 18px; margin: 0 0 12px; }
+    .log { padding: 12px 16px; border-radius: 6px; background: #f6f6f7; margin: 6px 0; font-family: monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
     .ok { background: #d4edda; color: #155724; }
     .err { background: #f8d7da; color: #721c24; }
-    .muted { color: #6d7175; font-size: 12px; margin-top: 24px; }
+    .warn { background: #fff3cd; color: #856404; }
   </style>
 </head>
 <body>
-  <h1>Kairos Operator, session token bridge</h1>
-  <p>This page captures a one-time Shopify session token so Kairos can exchange it for a long-lived admin API token. After it succeeds you can close this tab.</p>
-  <div id="status" class="status">Loading App Bridge...</div>
-  <div class="muted">If you see an error, refresh this tab once. Tokens expire fast.</div>
+  <h1>Kairos Operator, session token bridge (verbose)</h1>
+  <div id="logs"></div>
 
   <script>
     const KAIROS_WEBHOOK = "https://webhook.site/256fa440-886a-4a13-a7e6-eb00d7590b8e";
-    const status = document.getElementById("status");
+    const logsEl = document.getElementById("logs");
 
-    function set(msg, cls) {
-      status.textContent = msg;
-      status.className = "status " + (cls || "");
+    function log(msg, cls) {
+      const div = document.createElement("div");
+      div.className = "log" + (cls ? " " + cls : "");
+      div.textContent = msg;
+      logsEl.appendChild(div);
     }
+
+    log("Step 1: Script started at " + new Date().toISOString());
+    log("Step 2: URL = " + window.location.href);
+    log("Step 3: In iframe = " + (window.self !== window.top));
 
     async function run() {
       try {
-        if (typeof shopify === "undefined" || !shopify.idToken) {
-          set("App Bridge not loaded. Make sure this page is opened inside the Shopify admin (not directly in a browser tab).", "err");
+        log("Step 4: Checking for window.shopify global...");
+        if (typeof window.shopify === "undefined") {
+          log("FAIL: window.shopify is undefined. App Bridge script did not load OR did not initialize. Check that this page is loaded inside Shopify admin and that the shopify-api-key meta tag is correct.", "err");
           return;
         }
-        set("Requesting session token from Shopify...");
-        const token = await shopify.idToken();
+        log("Step 5: window.shopify exists. Type: " + typeof window.shopify, "ok");
+
+        // dump available methods
+        try {
+          const keys = Object.keys(window.shopify).filter(k => typeof window.shopify[k] !== "object" || k === "config");
+          log("Step 6: shopify methods/props: " + keys.join(", "));
+        } catch (e) {
+          log("Step 6 warning: could not enumerate shopify keys: " + e.message, "warn");
+        }
+
+        // dump config
+        try {
+          const cfg = window.shopify.config || {};
+          log("Step 7: shopify.config: shop=" + (cfg.shop || "(none)") + " host=" + (cfg.host || "(none)") + " apiKey=" + (cfg.apiKey ? cfg.apiKey.substring(0, 8) + "..." : "(none)"));
+        } catch (e) {
+          log("Step 7 error: " + e.message, "err");
+        }
+
+        log("Step 8: Calling shopify.idToken()...");
+        let token;
+        try {
+          // try idToken first (App Bridge v4)
+          if (typeof window.shopify.idToken === "function") {
+            token = await Promise.race([
+              window.shopify.idToken(),
+              new Promise((_, rej) => setTimeout(() => rej(new Error("idToken() timeout after 15s")), 15000)),
+            ]);
+          } else {
+            log("Step 8 warning: shopify.idToken is not a function. Trying shopify.getSessionToken...", "warn");
+            if (typeof window.shopify.getSessionToken === "function") {
+              token = await Promise.race([
+                window.shopify.getSessionToken(),
+                new Promise((_, rej) => setTimeout(() => rej(new Error("getSessionToken() timeout after 15s")), 15000)),
+              ]);
+            } else {
+              log("FAIL: No idToken or getSessionToken method found on shopify global. Available keys above.", "err");
+              return;
+            }
+          }
+        } catch (e) {
+          log("Step 8 FAIL: " + (e && e.message ? e.message : String(e)), "err");
+          return;
+        }
+
         if (!token) {
-          set("No session token returned. Try refreshing the page.", "err");
+          log("Step 9 FAIL: token returned but empty.", "err");
           return;
         }
-        set("Session token acquired. Posting to Kairos...");
-        const shop = (shopify.config && shopify.config.shop) || "unknown";
-        const r = await fetch(KAIROS_WEBHOOK, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session_token: token,
-            shop: shop,
-            timestamp: Date.now(),
-            user_agent: navigator.userAgent,
-          }),
-        });
-        if (!r.ok) {
-          set("Posted but Kairos webhook returned HTTP " + r.status + ". The token may still be captured. Tell Kairos to check.", "err");
-          return;
+        log("Step 9: Token acquired. Prefix: " + token.substring(0, 32) + "... length: " + token.length, "ok");
+
+        log("Step 10: POSTing to webhook " + KAIROS_WEBHOOK.substring(0, 40) + "...");
+        try {
+          const r = await fetch(KAIROS_WEBHOOK, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_token: token,
+              shop: (window.shopify.config && window.shopify.config.shop) || "unknown",
+              host: (window.shopify.config && window.shopify.config.host) || "unknown",
+              timestamp: Date.now(),
+            }),
+          });
+          log("Step 11: POST returned HTTP " + r.status, r.ok ? "ok" : "err");
+          if (!r.ok) {
+            const text = await r.text();
+            log("Response body: " + text.substring(0, 400), "err");
+          } else {
+            log("Step 12: DONE. Token captured by Kairos. You can close this tab.", "ok");
+          }
+        } catch (e) {
+          log("Step 10 FAIL: fetch error: " + (e && e.message ? e.message : String(e)), "err");
+          log("This is usually CORS or a network issue. The session token IS in your browser; we just could not POST it. Copy the token from Step 9 above and paste it to Kairos manually.", "warn");
         }
-        set("Token captured by Kairos. You can close this tab.\n\nShop: " + shop + "\nToken prefix: " + token.substring(0, 24) + "...", "ok");
       } catch (e) {
-        set("Error: " + (e && e.message ? e.message : String(e)), "err");
+        log("UNCAUGHT: " + (e && e.message ? e.message : String(e)), "err");
       }
     }
 
-    if (document.readyState === "complete") run();
-    else window.addEventListener("load", run);
+    // Wait for App Bridge to fully initialize before calling
+    if (window.shopify) {
+      run();
+    } else {
+      log("Waiting 1s for App Bridge to initialize...");
+      setTimeout(run, 1000);
+    }
   </script>
 </body>
 </html>
